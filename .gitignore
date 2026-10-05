@@ -1,0 +1,42 @@
+
+# Python virtual environments
+.DEV/
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local environment settings
+.env
+.env.*
+!.env.example
+
+# Temporarily exclude local configuration until reviewed for credentials
+/config.py
+
+# Runtime logs, exports, and backups
+/logs/
+/out/
+/bak/
+*.log
+
+# Local database and associated runtime files
+/zmtrucks_netsuite_api.db
+/zmtrucks_netsuite_api.db-*
+
+# Operational JSON and CSV files in the project root
+/RE_*.json
+/order_confirmation_*.csv
+/receipt_confirmation_*.csv
+
+# Local scratch files and notes pending review
+/temp.txt
+/zmtrucks_notes.txt
+
+# Operating-system files
+.DS_Store
+Thumbs.db
