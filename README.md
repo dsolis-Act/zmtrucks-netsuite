@@ -76,10 +76,6 @@ With dependencies, local configuration, and database/token state prepared, run t
 python run_export.py
 ```
 
-## Security
-
-Keep credentials, OAuth tokens, and operational customer data out of version control. Local configuration, virtual environments, databases, logs, backups, and generated exports are excluded through [`.gitignore`](.gitignore). Any committed configuration examples or test fixtures must contain only placeholders or sanitized data.
-
 ## Development and releases
 
 Development follows a trunk-based workflow on `main`, with incremental commits rather than long-lived development or release branches. Annotated version tags identify selected release commits and remain fixed once published.
