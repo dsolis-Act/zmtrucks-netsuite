@@ -1,95 +1,87 @@
-# NetSuite 943 Export
+# ZMTRUCKS NetSuite Integration
 
-This is a simple NetSuite purchase-order export pipeline built so the same structure can later be reused for sales orders.
+Python integration for exporting ZMTRUCKS purchase orders and sales orders from NetSuite into JSON payloads for ACT Fulfillment's warehouse workflows.
 
-## Files
+The application retrieves transaction data using SuiteQL and NetSuite record API calls, builds transaction-specific payloads, and tracks export results in SQLite to avoid re-exporting records already marked successful.
 
-- `config.py` - settings and environment variables
-- `db.py` - SQLite schema and persistence helpers
-- `logger_setup.py` - file and console logging
-- `netsuite_client.py` - token refresh, SuiteQL, record GET, failure email
-- `po_exporter.py` - purchase-order SuiteQL pull, header enrichment, JSON build, file write, duplicate prevention
-- `seed_refresh_token.py` - one-time seed script for the refresh token
-- `run_export.py` - entry point
+## Supported exports
 
-## SQLite tables
+| NetSuite transaction | Export | Module | Output filename |
+| --- | --- | --- | --- |
+| Purchase order | 943 JSON | [`po_exporter.py`](po_exporter.py) | `AR_943_<po_number>_<timestamp>.json` |
+| Sales order | 940 JSON | [`so_exporter.py`](so_exporter.py) | `PO_940_<so_number>_<timestamp>.json` |
 
-### oauth_tokens
-Stores the current refresh token, access token, expiration, and update timestamp.
+These outputs are JSON payloads for the corresponding warehouse integration workflows, not raw X12 documents. Files are written to the configured `OUTPUT_FOLDER` with UTC timestamps in their filenames.
 
-### exports
-Tracks which records were already processed so duplicate files are not generated.
+## Architecture
 
-Important fields:
-- `export_type` - lets you reuse the same table for future exports like sales orders
-- `record_internal_id` - NetSuite internal ID
-- `status` - `suiteql_pulled`, `header_pulled`, `success`, or `failed`
-- `output_file` - written file path when successful
+Purchase-order and sales-order processing use separate exporter classes with a shared NetSuite client, persistence layer, and logging infrastructure. Both classes accept a NetSuite client and logger and expose a `run()` method.
 
-## Setup
+| File | Responsibility |
+| --- | --- |
+| [`po_exporter.py`](po_exporter.py) | `PurchaseOrder943Exporter`: purchase-order queries, grouping, 943 mapping, and file generation. |
+| [`so_exporter.py`](so_exporter.py) | `SalesOrderExporter`: sales-order queries, grouping, 940 mapping, and file generation. |
+| [`netsuite_client.py`](netsuite_client.py) | Shared token refresh, SuiteQL execution, record retrieval, and failure-email handling. |
+| [`db.py`](db.py) | SQLite schema and persistence helpers for OAuth tokens and export tracking. |
+| [`logger_setup.py`](logger_setup.py) | File and console logging. |
+| [`seed_refresh_token.py`](seed_refresh_token.py) | Initial refresh-token seeding utility. |
+| [`run_export.py`](run_export.py) | Application entry point. |
 
-Set environment variables before running:
+## Processing flow
 
-```bash
-export NS_ACCOUNT_ID="9582941-sb1"
-export NS_CLIENT_ID="your_client_id"
-export NS_CLIENT_SECRET="your_client_secret"
-export DATABASE_FILE="netsuite_943.db"
-export OUTPUT_FOLDER="out"
-export LOG_FOLDER="logs"
-```
+1. Query eligible transaction lines using SuiteQL.
+2. Group lines by NetSuite internal ID and skip records already marked `success` for that export type.
+3. Retrieve the transaction header through the shared NetSuite client.
+4. Build the 943 or 940 payload and write a JSON file.
+5. Record the result in SQLite. Per-order failures are logged and passed to the client's failure-email handler.
 
-Optional SMTP settings for failure emails:
+### Purchase orders — 943
 
-```bash
-export SMTP_HOST="mail.yourserver.com"
-export SMTP_PORT="25"
-export SMTP_USERNAME=""
-export SMTP_PASSWORD=""
-export SMTP_USE_TLS="false"
-export FAILURE_EMAIL_FROM="alerts@yourdomain.com"
-export FAILURE_EMAIL_TO="you@yourdomain.com"
-```
+The purchase-order query selects `PurchOrd` transactions where `custbodyzm_actlocation_field = 1` and the line has an item. The payload includes shipment and purchase-order references, facility addresses, item identifiers, and quantities.
 
-## First run
+The current mapping uses the container number for the order-level `PurchaseOrderNumber` and fixed facility address values.
 
-1. Put your refresh token into `seed_refresh_token.py`
-2. Run:
+### Sales orders — 940
 
-```bash
-python seed_refresh_token.py
-```
+The sales-order query selects `SalesOrd` transactions for the same ACT-location field value. It excludes lines without an item, item `-7`, and zero quantities. Payload construction also excludes an item matching the order header's shipping method.
 
-3. Then run:
+The payload includes order references, transaction and shipping dates, ship-to details, carrier and service information, and line-level VIN references. Order quantities are converted to absolute values.
+
+## Persistence and export tracking
+
+SQLite stores local state in two tables:
+
+| Table | Purpose |
+| --- | --- |
+| `oauth_tokens` | Refresh token, access token, expiration, and token-update information. |
+| `exports` | Processing status, transaction identifiers, timestamps, output paths, and error details. |
+
+Export records are looked up by export type and NetSuite internal ID. The exporters use `purchase_order_943` and `sales_order_940` as their export types.
+
+Normal processing advances through `suiteql_pulled`, `header_pulled`, and `success`. Per-order exceptions are recorded as `failed`. Records marked `success` are skipped on subsequent runs.
+
+A successful export means the JSON file was written and the export record was updated. It does not confirm downstream delivery, warehouse import, or acknowledgment.
+
+## Configuration and execution
+
+Execution requires a Python environment with the application's dependencies, NetSuite OAuth access, and writable local paths for the database, output files, and logs.
+
+Environment-specific settings are maintained in a local `config.py`, which is excluded from version control. Configuration covers NetSuite account and client credentials, the SQLite database path, output and log folders, and optional SMTP settings for failure notifications.
+
+The local OAuth token store must be initialized before authenticated processing. `seed_refresh_token.py` is the token-initialization utility; credentials and token values must not be saved in tracked source files.
+
+With dependencies, local configuration, and database/token state prepared, run the application entry point:
 
 ```bash
 python run_export.py
 ```
 
-## Current flow
+## Security
 
-1. Read token state from SQLite
-2. Refresh token if expired
-3. Run SuiteQL for purchase-order lines and reusable header fields
-4. Group rows by PO internal ID
-5. Skip records already marked `success`
-6. Call PO REST endpoint for ship-to/header enrichment
-7. Build 943 JSON payload
-8. Write file
-9. Track success or failure in SQLite
-10. Send failure email if configured
+Keep credentials, OAuth tokens, and operational customer data out of version control. Local configuration, virtual environments, databases, logs, backups, and generated exports are excluded through [`.gitignore`](.gitignore). Any committed configuration examples or test fixtures must contain only placeholders or sanitized data.
 
-## Future sales-order reuse
+## Development and releases
 
-The structure is already ready for a future sales-order exporter:
+Development follows a trunk-based workflow on `main`, with incremental commits rather than long-lived development or release branches. Annotated version tags identify selected release commits and remain fixed once published.
 
-- same `NetSuiteClient`
-- same token lifecycle
-- same `exports` table
-- same logger
-- same output and failure email pattern
-
-You would mainly add another exporter file like `so_exporter.py` with:
-- a sales-order SuiteQL query
-- a sales-order header GET
-- a sales-order JSON mapper
+The same commits and release tags should be published to Gitea and GitHub. Both hosts represent the same project, not separate development versions.
